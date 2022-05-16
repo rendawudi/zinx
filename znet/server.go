@@ -2,6 +2,7 @@ package znet
 
 import (
 	"fmt"
+	"github.com/xtaci/kcp-go/v5"
 	"net"
 
 	"github.com/aceld/zinx/utils"
@@ -31,6 +32,11 @@ type Server struct {
 	IP string
 	//服务绑定的端口
 	Port int
+	//是否使用kcp替代tcp
+	OpenKcp         bool
+	KcpBlock        kcp.BlockCrypt
+	KcpDataShards   int
+	KcpParityShards int
 	//当前Server的消息管理模块，用来绑定MsgID和对应的处理方法
 	msgHandler ziface.IMsgHandle
 	//当前Server的链接管理器
@@ -48,13 +54,17 @@ func NewServer(opts ...Option) ziface.IServer {
 	printLogo()
 
 	s := &Server{
-		Name:       utils.GlobalObject.Name,
-		IPVersion:  "tcp4",
-		IP:         utils.GlobalObject.Host,
-		Port:       utils.GlobalObject.TCPPort,
-		msgHandler: NewMsgHandle(),
-		ConnMgr:    NewConnManager(),
-		packet:     NewDataPack(),
+		Name:            utils.GlobalObject.Name,
+		IPVersion:       "tcp4",
+		IP:              utils.GlobalObject.Host,
+		Port:            utils.GlobalObject.TCPPort,
+		msgHandler:      NewMsgHandle(),
+		ConnMgr:         NewConnManager(),
+		packet:          NewDataPack(),
+		OpenKcp:         utils.GlobalObject.OpenKcp,
+		KcpBlock:        utils.GlobalObject.KcpBlock,
+		KcpDataShards:   utils.GlobalObject.KcpDataShards,
+		KcpParityShards: utils.GlobalObject.KcpParityShards,
 	}
 
 	for _, opt := range opts {
@@ -71,54 +81,100 @@ func (s *Server) Start() {
 	fmt.Printf("[START] Server name: %s,listenner at IP: %s, Port %d is starting\n", s.Name, s.IP, s.Port)
 
 	//开启一个go去做服务端Linster业务
-	go func() {
-		//0 启动worker工作池机制
-		s.msgHandler.StartWorkerPool()
+	if s.OpenKcp {
+		go s.startKcp()
+	} else {
+		go s.startTcp()
+	}
+}
 
-		//1 获取一个TCP的Addr
-		addr, err := net.ResolveTCPAddr(s.IPVersion, fmt.Sprintf("%s:%d", s.IP, s.Port))
+func (s *Server) startTcp() {
+	//0 启动worker工作池机制
+	s.msgHandler.StartWorkerPool()
+
+	//1 获取一个TCP的Addr
+	addr, err := net.ResolveTCPAddr(s.IPVersion, fmt.Sprintf("%s:%d", s.IP, s.Port))
+	if err != nil {
+		fmt.Println("resolve tcp addr err: ", err)
+		return
+	}
+
+	//2 监听服务器地址
+	listener, err := net.ListenTCP(s.IPVersion, addr)
+	if err != nil {
+		panic(err)
+	}
+
+	//已经监听成功
+	fmt.Println("start Zinx server  ", s.Name, " succ, now listenning...")
+
+	//TODO server.go 应该有一个自动生成ID的方法
+	var cID uint32
+	cID = 0
+
+	//3 启动server网络连接业务
+	for {
+		//3.1 阻塞等待客户端建立连接请求
+		conn, err := listener.AcceptTCP()
 		if err != nil {
-			fmt.Println("resolve tcp addr err: ", err)
-			return
+			fmt.Println("Accept err ", err)
+			continue
+		}
+		fmt.Println("Get conn remote addr = ", conn.RemoteAddr().String())
+
+		//3.2 设置服务器最大连接控制,如果超过最大连接，那么则关闭此新的连接
+		if s.ConnMgr.Len() >= utils.GlobalObject.MaxConn {
+			conn.Close()
+			continue
 		}
 
-		//2 监听服务器地址
-		listener, err := net.ListenTCP(s.IPVersion, addr)
+		//3.3 处理该新连接请求的 业务 方法， 此时应该有 handler 和 conn是绑定的
+		dealConn := NewConnection(s, conn, cID, s.msgHandler)
+		cID++
+
+		//3.4 启动当前链接的处理业务
+		go dealConn.Start()
+	}
+}
+
+func (s *Server) startKcp() {
+	//0 启动worker工作池机制
+	s.msgHandler.StartWorkerPool()
+
+	listener, err := kcp.ListenWithOptions(fmt.Sprintf("%s:%d", s.IP, s.Port), s.KcpBlock, s.KcpDataShards, s.KcpParityShards)
+	if err != nil {
+		panic(err)
+	}
+	//已经监听成功
+	fmt.Println("start Zinx server  ", s.Name, " succ, now listenning...")
+
+	//TODO server.go 应该有一个自动生成ID的方法
+	var cID uint32
+	cID = 0
+
+	//3 启动server网络连接业务
+	for {
+		//3.1 阻塞等待客户端建立连接请求
+		conn, err := listener.AcceptKCP()
 		if err != nil {
-			panic(err)
+			fmt.Println("Accept err ", err)
+			continue
+		}
+		fmt.Println("Get conn remote addr = ", conn.RemoteAddr().String())
+
+		//3.2 设置服务器最大连接控制,如果超过最大连接，那么则关闭此新的连接
+		if s.ConnMgr.Len() >= utils.GlobalObject.MaxConn {
+			conn.Close()
+			continue
 		}
 
-		//已经监听成功
-		fmt.Println("start Zinx server  ", s.Name, " succ, now listenning...")
+		//3.3 处理该新连接请求的 业务 方法， 此时应该有 handler 和 conn是绑定的
+		dealConn := NewConnection(s, conn, cID, s.msgHandler)
+		cID++
 
-		//TODO server.go 应该有一个自动生成ID的方法
-		var cID uint32
-		cID = 0
-
-		//3 启动server网络连接业务
-		for {
-			//3.1 阻塞等待客户端建立连接请求
-			conn, err := listener.AcceptTCP()
-			if err != nil {
-				fmt.Println("Accept err ", err)
-				continue
-			}
-			fmt.Println("Get conn remote addr = ", conn.RemoteAddr().String())
-
-			//3.2 设置服务器最大连接控制,如果超过最大连接，那么则关闭此新的连接
-			if s.ConnMgr.Len() >= utils.GlobalObject.MaxConn {
-				conn.Close()
-				continue
-			}
-
-			//3.3 处理该新连接请求的 业务 方法， 此时应该有 handler 和 conn是绑定的
-			dealConn := NewConnection(s, conn, cID, s.msgHandler)
-			cID++
-
-			//3.4 启动当前链接的处理业务
-			go dealConn.Start()
-		}
-	}()
+		//3.4 启动当前链接的处理业务
+		go dealConn.Start()
+	}
 }
 
 //Stop 停止服务

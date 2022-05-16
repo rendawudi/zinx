@@ -18,7 +18,7 @@ type Connection struct {
 	//当前Conn属于哪个Server
 	TCPServer ziface.IServer
 	//当前连接的socket TCP套接字
-	Conn *net.TCPConn
+	Conn ziface.IStream
 	//当前连接的ID 也可以称作为SessionID，ID全局唯一
 	ConnID uint32
 	//消息管理MsgID和对应处理方法的消息管理模块
@@ -39,7 +39,7 @@ type Connection struct {
 }
 
 //NewConnection 创建连接的方法
-func NewConnection(server ziface.IServer, conn *net.TCPConn, connID uint32, msgHandler ziface.IMsgHandle) *Connection {
+func NewConnection(server ziface.IServer, conn ziface.IStream, connID uint32, msgHandler ziface.IMsgHandle) *Connection {
 	//初始化Conn属性
 	c := &Connection{
 		TCPServer:   server,
@@ -159,7 +159,7 @@ func (c *Connection) Stop() {
 }
 
 //GetTCPConnection 从当前连接获取原始的socket TCPConn
-func (c *Connection) GetTCPConnection() *net.TCPConn {
+func (c *Connection) GetTCPConnection() ziface.IStream {
 	return c.Conn
 }
 

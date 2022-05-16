@@ -15,6 +15,7 @@ import (
 	"github.com/aceld/zinx/utils/commandline/uflag"
 	"github.com/aceld/zinx/ziface"
 	"github.com/aceld/zinx/zlog"
+	"github.com/xtaci/kcp-go/v5"
 	"io/ioutil"
 	"os"
 )
@@ -27,11 +28,14 @@ type GlobalObj struct {
 	/*
 		Server
 	*/
-	TCPServer ziface.IServer //当前Zinx的全局Server对象
-	Host      string         //当前服务器主机IP
-	TCPPort   int            //当前服务器主机监听端口号
-	Name      string         //当前服务器名称
-
+	TCPServer       ziface.IServer //当前Zinx的全局Server对象
+	Host            string         //当前服务器主机IP
+	TCPPort         int            //当前服务器主机监听端口号
+	Name            string         //当前服务器名称
+	OpenKcp         bool
+	KcpBlock        kcp.BlockCrypt
+	KcpDataShards   int
+	KcpParityShards int
 	/*
 		Zinx
 	*/
@@ -109,7 +113,7 @@ func init() {
 	}
 
 	// 初始化配置模块flag
-	args.InitConfigFlag( pwd + "/conf/zinx.json","配置文件，如果没有设置，则默认为<exeDir>/conf/zinx.json")
+	args.InitConfigFlag(pwd+"/conf/zinx.json", "配置文件，如果没有设置，则默认为<exeDir>/conf/zinx.json")
 	// 初始化日志模块flag TODO
 	// 解析
 	uflag.Parse()
@@ -124,16 +128,19 @@ func init() {
 		Host:             "0.0.0.0",
 		MaxConn:          12000,
 		MaxPacketSize:    4096,
-		ConfFilePath:     args.Args.ConfigFile ,
+		ConfFilePath:     args.Args.ConfigFile,
 		WorkerPoolSize:   10,
 		MaxWorkerTaskLen: 1024,
 		MaxMsgChanLen:    1024,
 		LogDir:           pwd + "/log",
 		LogFile:          "",
 		LogDebugClose:    false,
+		OpenKcp:          false,
+		KcpBlock:         nil,
+		KcpDataShards:    10,
+		KcpParityShards:  3,
 	}
 
 	//NOTE: 从配置文件中加载一些用户配置的参数
 	GlobalObject.Reload()
 }
-
